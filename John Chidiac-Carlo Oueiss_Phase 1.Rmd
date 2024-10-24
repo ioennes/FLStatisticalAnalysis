@@ -1,0 +1,263 @@
+---
+title: "French Load Consumption, Phase 1"
+author: "John Chidiac, Carlo Oueiss"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. The Dataset
+
+The dataset is built for energy demand forecasting, specifically in france, where the goal is to predict the load based on various factors, which are primarily weather-related. The dataset also contains temporal information such as day of the week, holidays, and whether it’s a weekend, which allow us to form a more precise study. We obtain the [French Load Consumption](https://www.openml.org/search?type=data&sort=date&status=active&id=46340) dataset from OpenML. The dataset ranges from 2017 to 2022, spanning 105k rows, and the data is recorded each 30 minutes.
+
+We use farff to import the dataset as it is in ARFF format.
+
+```{r, echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+library(farff)
+data <- readARFF("./french_load.arff")
+```
+
+## 2. Preprocessing and Visualizing
+
+As a first step, we take a look at the structure of our data:
+
+```{r}
+str(data)
+```
+
+We can see that the `id` column is useless, and that we have a number of columns presenting categorical data, such as `JourSemaine`, `JourFerie`, `DayType`, `Weekend`, and `Instant`. Given that the given information about the dataset is limited, we choose to omit `Instant`, `DayType`, and `offset`. We will also omit rows with N/A values. We will transform `date` into a viable format. The column `JourSemaine` describes what day of the week where we can assume `0` stands for Monday, in accordance with the French system. `JourFerie` is binary data stating whether the day is a holiday or not, and `Weekend` states whether it is a weekend or not. We transform these threes to factors so they are not confused with numerical data.
+
+```{r}
+data <- data[ , !(names(data) %in% c("offset", "Instant", "DayType", "id"))]
+data$date <- as.POSIXct(data$date, format="%Y-%m-%dT%H:%M:%SZ")
+data$JourSemaine <- as.factor(data$JourSemaine)
+data$JourFerie <- as.factor(data$JourFerie)
+data$Weekend <- as.factor(data$Weekend)
+str(data)
+```
+
+To gain a general view of the dataset, we will take a look at a summary of the data.
+
+Now, we will explore the variables.
+
+```{r}
+summary(data)
+```
+
+We can see that the dates range from January 1, 2017 until December 31, 2022. Looking at the `Load`, it is clear there is a large difference between the minimum and maximum, so our task will be investigating the variables that impact `Load`.
+
+To give a general overview of the temperature trends, we will smooth them using a moving average. We speculate that the `sun` variable either denotes the visibility of the sun, or the impact of the sun in a given day. We can find evidence of this by observing that the plots for temperature and sun follow the same pattern. We assume the opposite trend for wind, and this is confirmed by the plot.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Temperature (left), sun visibility (middle), and wind strength (right) through time (2017-2022)"}
+library(zoo)
+library(ggplot2)
+library(gridExtra)
+
+window_size <- 5000
+
+data$tempAvg <- (data$tempMin + data$tempMax) / 2
+data$tempMin_smooth <- rollmean(data$tempMin, k = window_size, fill = NA, align = "right")
+data$tempMax_smooth <- rollmean(data$tempMax, k = window_size, fill = NA, align = "right")
+data$tempAvg_smooth <- rollmean(data$tempAvg, k = window_size, fill = NA, align = "right")
+data$sun_smooth <- rollmean(data$sun, k = 5000, fill = NA, align = "right")
+data$wind_smooth <- rollmean(data$wind, k = 5000, fill = NA, align = "right")
+
+plot1 <- ggplot(data, aes(x = date)) +
+  geom_line(aes(y = tempMin_smooth, color = 'Min Temp')) +
+  geom_line(aes(y = tempMax_smooth, color = 'Max Temp')) +
+  geom_line(aes(y = tempAvg_smooth, color = 'Avg Temp')) +
+  labs(y = "Temperature", color = "Legend") +
+  theme(legend.position = "bottom")
+
+plot2 <- ggplot(data, aes(x = date)) +
+  geom_line(aes(y = sun_smooth, color = 'Sun Visibility')) +
+  labs(y = "Sun", color = "Legend") +
+  theme(legend.position = "bottom")
+
+plot2 <- ggplot(data, aes(x = date)) +
+  geom_line(aes(y = sun_smooth, color = 'Sun Visibility')) +
+  labs(y = "Sun", color = "Legend") +
+  theme(legend.position = "bottom")
+
+plot3 <- ggplot(data, aes(x = date)) +
+  geom_line(aes(y = wind_smooth, color = 'Wind Strength')) +
+  labs(y = "Wind", color = "Legend") +
+  theme(legend.position = "bottom")
+
+# Arrange plots side by side
+grid.arrange(plot1, plot2, plot3, ncol = 2, nrow = 2)
+```
+
+We hypothesize that electricity consumption remains, to an extent, the same between weekends and weekdays, and decreases significantly during week-day holidays and even more when it is a weekend and holiday.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Electricity consumption on weekdays, weekends, and holidays", out.width="36%", out.height="36%", fig.align='center'}
+# Load necessary libraries
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+
+
+# Ensure 'date' is in proper date-time format
+data$date <- as.POSIXct(data$date, format = "%Y-%m-%d %H:%M:%S")
+
+# Create a new column with just the date part (to group by day)
+data$day <- as.Date(data$date)
+
+# Create a flag for weekend (1 = weekend, 0 = weekday)
+data <- data %>%
+  mutate(Weekend = ifelse(wday(day) %in% c(1, 7), 1, 0))  # Sunday (1) and Saturday (7) are weekends
+
+# Summarize daily load consumption
+daily_load <- data %>%
+  group_by(day, JourFerie, Weekend) %>%
+  summarise(DailyLoad = sum(Load, na.rm = TRUE),
+            temp = mean(temp, na.rm = TRUE),
+            sun = mean(sun, na.rm = TRUE),
+            wind = mean(wind, na.rm = TRUE))
+
+# Filter for specific categories
+
+# Weekdays only (non-holiday)
+weekday_load <- daily_load %>%
+  filter(Weekend == 0 & JourFerie == 0)
+
+# Weekends only (non-holiday)
+weekend_load <- daily_load %>%
+  filter(Weekend == 1 & JourFerie == 0)
+
+# Holidays only (non-weekend)
+holiday_load <- daily_load %>%
+  filter(JourFerie == 1 & Weekend == 0)
+
+# Holidays that fall on weekends
+holiday_weekend_load <- daily_load %>%
+  filter(JourFerie == 1 & Weekend == 1)
+
+avg_weekday_load <- mean(weekday_load$DailyLoad)
+
+avg_weekend_load <- mean(weekend_load$DailyLoad)
+
+avg_holiday_load <- mean(holiday_load$DailyLoad)
+
+avg_holiday_weekend_load <- mean(holiday_weekend_load$DailyLoad)
+
+# Visualize the results
+# Combine all categories into a single dataset
+daily_load$Category <- case_when(
+  daily_load$Weekend == 0 & daily_load$JourFerie == 0 ~ "Weekday",
+  daily_load$Weekend == 1 & daily_load$JourFerie == 0 ~ "Weekend",
+  daily_load$Weekend == 0 & daily_load$JourFerie == 1 ~ "Holiday",
+  daily_load$Weekend == 1 & daily_load$JourFerie == 1 ~ "Holiday + Weekend"
+)
+
+# Plot the daily load by category
+ggplot(daily_load, aes(x = Category, y = DailyLoad, fill = Category)) +
+  geom_boxplot() +
+    labs(x = "Day Type",
+       y = "Daily Load")
+```
+
+## Regression
+
+In this section, we will start with simple linear regression, then slowly progress into exploring more complex relationships between predictors through more complex techniques such as multiple linear regression with interaction.
+
+### Simple Linear Regression
+
+Having taken a look at the temperature trends, we observe they are close to identical each year, so we will currently only concern ourselves with tasks during 2017. We will also disregard changes throughout the day, calculating daily `Load` as the sum of `Load` throughout the day, and the `temp`, `sun`, and `wind` as their respective means. For easier interpretation of linear regression values, we will scale the load values between 0 and 100. As a simple first experiment, we try to establish a relationship between `temp` and `Load`.
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Electricity consumption between the months of January to June, and July to December", out.width="55%", out.height="55%", fig.align='center'}
+library(zoo)
+library(ggplot2)
+library(gridExtra)
+
+min_load <- min(daily_load$DailyLoad, na.rm = TRUE)
+max_load <- max(daily_load$DailyLoad, na.rm = TRUE)
+
+daily_load$DailyLoad_scaled <- (daily_load$DailyLoad - min_load) / (max_load - min_load) * 100
+
+data_2017 <- daily_load %>%
+  filter(year(day) == 2017)
+
+# Filter the data
+jan_to_june <- data_2017 %>%
+  filter(month(day) %in% 1:6)
+july_to_dec <- data_2017 %>%
+  filter(month(day) %in% 7:11)
+
+# Perform simple linear regression
+lm_jan_to_june <- lm(DailyLoad_scaled ~ temp, data = jan_to_june)
+summary(lm_jan_to_june)
+lm_july_to_dec <- lm(DailyLoad_scaled ~ temp, data = july_to_dec)
+summary(lm_july_to_dec)
+
+# Plot the regression line
+plot_jan_to_june <- ggplot(jan_to_june, aes(x = day, y = DailyLoad_scaled)) +
+  geom_point(size=1) +
+  geom_smooth(method = "lm") +
+  labs(x = "Date", y = "Daily Load")
+
+plot_july_to_dec <- ggplot(july_to_dec, aes(x = day, y = DailyLoad_scaled)) +
+  geom_point(size=1) +
+  geom_smooth(method = "lm") +
+  labs(x = "Date", y = "Daily Load")
+
+# Arrange plots side by side
+grid.arrange(plot_jan_to_june, plot_july_to_dec, ncol = 2)
+```
+
+We split the 2017 data into two parts, since it is evident that the inverted bell shape presented by the temperature throughout time will result in a very poor linear model. This split allows for a more accurate model. In the linear model for January to June, the multiple R-squared is 0.7257, meaning that about 72.57% of the variance in the scaled daily load is explained by the temperature, the RSE is 13.54, meaning the model is making reasonable predictions, and the p-value is less than 0.001, indicating the relationship between temperature and daily load is significant. In the model for July to December the multiple R-squared is 0.6568, meaning that about 65.68% of the variance in the scaled daily load is explained by the temperature. We also obtain a RSE of 11.09, meaning on average, we may be around 11.09 the true value, which is reasonable to some extent, for this model, the p-value is also less than 0.001. In both cases we observe a large F-statistic, and we can conclude that temperature is a useful predictor of scaled daily load.
+
+Next, we try to establish a simple linear relationship between `sun` and `Load`, as well as `wind` and `Load`. We expect a strong relationship between former, and a weaker one between the latter. We will also scale both `sun` and `wind` variables between 0 and 100 for easier interpretability of results. We will take into consideration the original data, rather than the cropped and aggregated daily data.
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.cap="Electricity Consumption vs Sun Visibility (left) and Electricity Consumption vs Wind Strength (right)", out.width="55%", out.height="55%", fig.align='center'}
+
+min_load <- min(data$Load, na.rm = TRUE)
+max_load <- max(data$Load, na.rm = TRUE)
+
+data$Load_scaled <- (data$Load - min_load) / (max_load - min_load) * 100
+
+min_wind <- min(data$wind, na.rm = TRUE)
+max_wind <- max(data$wind, na.rm = TRUE)
+
+min_sun <- min(data$sun, na.rm = TRUE)
+max_sun <- max(data$sun, na.rm = TRUE)
+
+data$wind_scaled <- (data$wind - min_wind) / (max_wind - min_wind) * 100
+data$sun_scaled <- (data$sun - min_sun) / (max_sun - min_sun) * 100
+
+lm_sun <- lm(Load_scaled ~ sun_scaled, data=data)
+summary(lm_sun)
+lm_wind <- lm(Load_scaled ~ wind_scaled, data=data)
+summary(lm_wind)
+
+plot_sun <- ggplot(data, aes(x=sun_scaled, y=Load_scaled)) +
+  geom_point(size = 0.1) +
+  geom_smooth(method="lm") +
+  labs(x = "Sun", y= "Load")
+  
+
+plot_wind <- ggplot(data, aes(x=wind_scaled, y=Load_scaled)) +
+  geom_point(size = 0.1) +
+  geom_smooth(method="lm") +
+  labs(x = "Wind", y= "Load")
+
+grid.arrange(plot_sun, plot_wind, ncol = 2)
+```
+
+We find that around 7% of the variability in the data can be explained by the sun conditions, while only 3% can be explained by the wind.
+
+### Multiple Linear Regression
+
+From the results above, we hypothesize that using both the `sun` conditions and `temp` as predictors would give us a more accurate model. Thus, we perform multiple linear regression with these two predictors.
+
+```{r}
+
+lm_temp_sun <- lm(Load_scaled ~ sun_scaled + temp, data)
+summary(lm_temp_sun)
+```
+
+The multiple linear regression model that includes both temperature and sunlight performs similarly to the temperature-only model, but adding sunlight doesn't provide a significant improvement in terms of R-squared, it has a slightly lower residual standard error (11.01). Finally, the F-statistic is massively large, indicating that this model is overall very statistically significant.

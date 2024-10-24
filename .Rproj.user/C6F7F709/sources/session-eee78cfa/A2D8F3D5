@@ -1,0 +1,26 @@
+{
+    "id": "A2D8F3D5",
+    "path": "~/Projects/datascience/french_load.R",
+    "project_path": "french_load.R",
+    "type": "r_source",
+    "hash": "0",
+    "contents": "",
+    "dirty": false,
+    "created": 1729760401505.0,
+    "source_on_save": false,
+    "relative_order": 1,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "13,0",
+        "scrollLine": "0"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1729778582,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1729778582287,
+    "read_only": false,
+    "read_only_alternatives": []
+}

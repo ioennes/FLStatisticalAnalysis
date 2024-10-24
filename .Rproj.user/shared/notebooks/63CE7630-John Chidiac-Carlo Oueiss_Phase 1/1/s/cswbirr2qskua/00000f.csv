@@ -1,0 +1,93 @@
+"0","# Load necessary libraries"
+"0","library(dplyr)"
+"2","
+Attaching package: ‘dplyr’
+
+"
+"2","The following object is masked from ‘package:gridExtra’:
+
+    combine
+
+"
+"2","The following objects are masked from ‘package:stats’:
+
+    filter, lag
+
+"
+"2","The following objects are masked from ‘package:base’:
+
+    intersect, setdiff, setequal, union
+
+"
+"0","library(lubridate)"
+"2","
+Attaching package: ‘lubridate’
+
+"
+"2","The following objects are masked from ‘package:base’:
+
+    date, intersect, setdiff, union
+
+"
+"0","library(ggplot2)"
+"0",""
+"0",""
+"0","# Ensure 'date' is in proper date-time format"
+"0","data$date <- as.POSIXct(data$date, format = ""%Y-%m-%d %H:%M:%S"")"
+"0",""
+"0","# Create a new column with just the date part (to group by day)"
+"0","data$day <- as.Date(data$date)"
+"0",""
+"0","# Create a flag for weekend (1 = weekend, 0 = weekday)"
+"0","data <- data %>%"
+"0","  mutate(Weekend = ifelse(wday(day) %in% c(1, 7), 1, 0))  # Sunday (1) and Saturday (7) are weekends"
+"0",""
+"0","# Summarize daily load consumption"
+"0","daily_load <- data %>%"
+"0","  group_by(day, JourFerie, Weekend) %>%"
+"0","  summarise(DailyLoad = sum(Load, na.rm = TRUE),"
+"0","            temp = mean(temp, na.rm = TRUE),"
+"0","            sun = mean(sun, na.rm = TRUE),"
+"0","            wind = mean(wind, na.rm = TRUE))"
+"1","[38;5;232m`summarise()` has grouped output by 'day', 'JourFerie'. You can override using the `.groups` argument.[39m
+"
+"0","# Filter for specific categories"
+"0",""
+"0","# Weekdays only (non-holiday)"
+"0","weekday_load <- daily_load %>%"
+"0","  filter(Weekend == 0 & JourFerie == 0)"
+"0",""
+"0","# Weekends only (non-holiday)"
+"0","weekend_load <- daily_load %>%"
+"0","  filter(Weekend == 1 & JourFerie == 0)"
+"0",""
+"0","# Holidays only (non-weekend)"
+"0","holiday_load <- daily_load %>%"
+"0","  filter(JourFerie == 1 & Weekend == 0)"
+"0",""
+"0","# Holidays that fall on weekends"
+"0","holiday_weekend_load <- daily_load %>%"
+"0","  filter(JourFerie == 1 & Weekend == 1)"
+"0",""
+"0","avg_weekday_load <- mean(weekday_load$DailyLoad)"
+"0",""
+"0","avg_weekend_load <- mean(weekend_load$DailyLoad)"
+"0",""
+"0","avg_holiday_load <- mean(holiday_load$DailyLoad)"
+"0",""
+"0","avg_holiday_weekend_load <- mean(holiday_weekend_load$DailyLoad)"
+"0",""
+"0","# Visualize the results"
+"0","# Combine all categories into a single dataset"
+"0","daily_load$Category <- case_when("
+"0","  daily_load$Weekend == 0 & daily_load$JourFerie == 0 ~ ""Weekday"","
+"0","  daily_load$Weekend == 1 & daily_load$JourFerie == 0 ~ ""Weekend"","
+"0","  daily_load$Weekend == 0 & daily_load$JourFerie == 1 ~ ""Holiday"","
+"0","  daily_load$Weekend == 1 & daily_load$JourFerie == 1 ~ ""Holiday + Weekend"""
+"0",")"
+"0",""
+"0","# Plot the daily load by category"
+"0","ggplot(daily_load, aes(x = Category, y = DailyLoad, fill = Category)) +"
+"0","  geom_boxplot() +"
+"0","    labs(x = ""Day Type"","
+"0","       y = ""Daily Load"")"
